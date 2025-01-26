@@ -1,14 +1,14 @@
 <?xml version="1.0" encoding="utf-8" standalone="yes"?>
 <rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom">
   <channel>
-    <title>Ryan19929&#39;s blog</title>
-    <link>http://localhost:1313/</link>
-    <description>Recent content on Ryan19929&#39;s blog</description>
+    <title>Posts on Ryan19929&#39;s blog</title>
+    <link>http://localhost:1313/posts/</link>
+    <description>Recent content in Posts on Ryan19929&#39;s blog</description>
     <generator>Hugo</generator>
     <language>en-us</language>
     <copyright>© Athul</copyright>
     <lastBuildDate>Sun, 26 Jan 2025 14:49:42 +0800</lastBuildDate>
-    <atom:link href="http://localhost:1313/index.xml" rel="self" type="application/rss+xml" />
+    <atom:link href="http://localhost:1313/posts/index.xml" rel="self" type="application/rss+xml" />
     <item>
       <title>IK不同平台上性能差异问题复盘</title>
       <link>http://localhost:1313/posts/ik-performance-review/</link>

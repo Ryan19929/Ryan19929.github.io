@@ -1,12 +1,12 @@
 <!DOCTYPE html>
 <html>
-	<head lang="en">
+	<head lang="en"><script src="/livereload.js?mindelay=10&amp;v=2&amp;port=1313&amp;path=livereload" data-no-instant defer></script>
 	<meta charset="utf-8" />
 	<meta http-equiv="X-UA-Compatible" content="IE=edge"><title>Ryan19929&#39;s blog | Home </title><meta name="viewport" content="width=device-width, initial-scale=1">
 	<meta name="description" content="" />
 	<meta property="og:image" content=""/>
-	<link rel="alternate" type="application/rss+xml" href="https://ryan19929.github.io/index.xml" title="Ryan19929's blog" />
-	<meta property="og:url" content="https://ryan19929.github.io/">
+	<link rel="alternate" type="application/rss+xml" href="http://localhost:1313/index.xml" title="Ryan19929's blog" />
+	<meta property="og:url" content="http://localhost:1313/">
   <meta property="og:site_name" content="Ryan19929&#39;s blog">
   <meta property="og:title" content="Ryan19929&#39;s blog">
   <meta property="og:locale" content="en_us">
@@ -15,13 +15,13 @@
   <meta name="twitter:card" content="summary">
   <meta name="twitter:title" content="Ryan19929&#39;s blog">
 
-        <link href="https://ryan19929.github.io/css/fonts.2c2227b81b1970a03e760aa2e6121cd01f87c88586803cbb282aa224720a765f.css" rel="stylesheet">
+        <link href="http://localhost:1313/css/fonts.2c2227b81b1970a03e760aa2e6121cd01f87c88586803cbb282aa224720a765f.css" rel="stylesheet">
 	
 
 	
-	<link rel="stylesheet" type="text/css" media="screen" href="https://ryan19929.github.io/css/main.e5be0b244cfea0385bf04425148e0847f227ebc587eb7cf8ce8e2532d66a9248.css" />
-		<link id="darkModeStyle" rel="stylesheet" type="text/css" href="https://ryan19929.github.io/css/dark.50b57e12d401420df23965fed157368aba37b76df0ecefd0b1ecd4da664f01a0.css" media="(prefers-color-scheme: dark)"  /><script type="text/javascript"
-		src="https://ryan19929.github.io/js/MathJax.js"></script>
+	<link rel="stylesheet" type="text/css" media="screen" href="http://localhost:1313/css/main.e5be0b244cfea0385bf04425148e0847f227ebc587eb7cf8ce8e2532d66a9248.css" />
+		<link id="darkModeStyle" rel="stylesheet" type="text/css" href="http://localhost:1313/css/dark.50b57e12d401420df23965fed157368aba37b76df0ecefd0b1ecd4da664f01a0.css" media="(prefers-color-scheme: dark)"  /><script type="text/javascript"
+		src="http://localhost:1313/js/MathJax.js"></script>
 		
 		<script type="text/x-mathjax-config">
 		MathJax.Hub.Config({
@@ -35,9 +35,9 @@
 						 extensions: ["AMSmath.js", "AMSsymbols.js"] }
 			}
 		});
-		</script><link rel="stylesheet" href="https://ryan19929.github.io/katex/katex.min.css ">
-		<script defer src="https://ryan19929.github.io/katex/katex.min.js"></script>
-		<script defer src="https://ryan19929.github.io/katex/auto-render.min.js" onload="renderMathInElement(document.body);"></script>
+		</script><link rel="stylesheet" href="http://localhost:1313/katex/katex.min.css ">
+		<script defer src="http://localhost:1313/katex/katex.min.js"></script>
+		<script defer src="http://localhost:1313/katex/auto-render.min.js" onload="renderMathInElement(document.body);"></script>
 		
 		<script>
 			document.addEventListener("DOMContentLoaded", function() {
@@ -55,7 +55,7 @@
 		<div class="content">
 			<header>
 	<div class="main">
-		<a href="https://ryan19929.github.io/">Ryan19929&#39;s blog</a>
+		<a href="http://localhost:1313/">Ryan19929&#39;s blog</a>
 	</div>
 	<nav>
 		
@@ -73,29 +73,74 @@
 
 			
 			<main class="list">
-				<div class="site-description"><p>Minimal and Clean <a href="https://github.com/athul/archie">blog theme for Hugo</a></p></div>
+				<div class="site-description"><p>You Only Live Once</p></div>
 				
 				
+				
+				<section class="list-item">
+					<h1 class="title"><a href="/posts/ik-performance-review/">IK不同平台上性能差异问题复盘</a></h1>
+					<time>Jan 26, 2025</time>
+					<br><div class="description">
+	
+	<h1 id="起因">起因</h1>
+<p>在优化IK分词器的过程中，发现C++版本在性能上落后于Java版本。在解决了内存频繁申请和回收的问题后，C++版本在Mac平台上的性能已经接近jieba_cpp版本。然而，在Linux服务器上，C++版本的性能仅与ik_java持平，与jieba_cpp的性能差距依然显著。</p>
+<h1 id="排查的过程">排查的过程</h1>
+<h2 id="perf工具分析">Perf工具分析</h2>
+<p>通过Perf工具生成的报告显示，basic_string::compare函数占用了较多的CPU资源(10%，callgrind函数调用占20%+)。然而，由于Perf未能明确显示该函数的调用者，初步推测可能是正常调用，因此暂时搁置了该区域的进一步调查，转而关注其他热点函数。</p>
+<h2 id="instruments工具分析">Instruments工具分析</h2>
+<p>在Mac平台上，使用Instruments工具收集CPU耗时数据。通过逐步优化代码质量较差的区域，每次优化带来2-5%的性能提升。最终，在引入内存池后，性能得到了显著提升，代码执行时间从约220秒优化至180秒左右。此后进一步优化的空间变得有限。</p>
+<h2 id="callgrind-工具分析">Callgrind 工具分析</h2>
+<p>使用Callgrind工具分析函数调用情况。由于使用800MB大小的数据集时，Callgrind收集数据的时间过长（数小时），一度误以为工具卡死。最终的报告清晰地揭示了lockBuffer和unlockBuffer函数调用了字符串的compare函数，并且占用27%。
+然而，Perf报告中unlockBuffer和lockBuffer的CPU占用率仅为3%，且在火焰图中的位置并不显眼，80%的CPU时间消耗在分词器的analysis部分，因此这些函数的影响被忽视。</p>
+<h1 id="代码分析">代码分析</h1>
+<p>以CJK_SEGMENTER为例，相关代码如下：</p>
+<div class="highlight"><pre tabindex="0" style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-cpp" data-lang="cpp"><span style="display:flex;"><span><span style="color:#75715e">// CJK_Segmenter
+</span></span></span><span style="display:flex;"><span><span style="color:#75715e"></span><span style="color:#66d9ef">const</span> std<span style="color:#f92672">::</span>string CJKSegmenter<span style="color:#f92672">::</span>SEGMENTER_NAME <span style="color:#f92672">=</span> <span style="color:#e6db74">&#34;CJK_SEGMENTER&#34;</span>;
+</span></span><span style="display:flex;"><span>context.lockBuffer(SEGMENTER_NAME);
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#75715e">// AnalyzeContext
+</span></span></span><span style="display:flex;"><span><span style="color:#75715e"></span><span style="color:#66d9ef">void</span> AnalyzeContext<span style="color:#f92672">::</span>lockBuffer(<span style="color:#66d9ef">const</span> std<span style="color:#f92672">::</span>string<span style="color:#f92672">&amp;</span> segmenterName) {
+</span></span><span style="display:flex;"><span>    <span style="color:#66d9ef">if</span> (segmenterName <span style="color:#f92672">==</span> <span style="color:#e6db74">&#34;CJK_SEGMENTER&#34;</span>)
+</span></span><span style="display:flex;"><span>        buffer_locker_ <span style="color:#f92672">|=</span> CJK_SEGMENTER_FLAG;
+</span></span><span style="display:flex;"><span>    <span style="color:#66d9ef">else</span> <span style="color:#a6e22e">if</span> (segmenterName <span style="color:#f92672">==</span> <span style="color:#e6db74">&#34;CN_QUANTIFIER&#34;</span>)
+</span></span><span style="display:flex;"><span>        buffer_locker_ <span style="color:#f92672">|=</span> CN_QUANTIFIER_FLAG;
+</span></span><span style="display:flex;"><span>    <span style="color:#66d9ef">else</span> <span style="color:#a6e22e">if</span> (segmenterName <span style="color:#f92672">==</span> <span style="color:#e6db74">&#34;LETTER_SEGMENTER&#34;</span>)
+</span></span><span style="display:flex;"><span>        buffer_locker_ <span style="color:#f92672">|=</span> LETTER_SEGMENTER_FLAG;
+</span></span><span style="display:flex;"><span>}
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#66d9ef">void</span> AnalyzeContext<span style="color:#f92672">::</span>unlockBuffer(SegmenterType type) {
+</span></span><span style="display:flex;"><span>    <span style="color:#66d9ef">switch</span> (type) {
+</span></span><span style="display:flex;"><span>    <span style="color:#66d9ef">case</span> SegmenterType<span style="color:#f92672">::</span>CJK_SEGMENTER:
+</span></span><span style="display:flex;"><span>        buffer_locker_ <span style="color:#f92672">&amp;=</span> <span style="color:#f92672">~</span>CJK_SEGMENTER_FLAG;
+</span></span><span style="display:flex;"><span>        <span style="color:#66d9ef">break</span>;
+</span></span><span style="display:flex;"><span>    <span style="color:#66d9ef">case</span> SegmenterType<span style="color:#f92672">::</span>CN_QUANTIFIER:
+</span></span><span style="display:flex;"><span>        buffer_locker_ <span style="color:#f92672">&amp;=</span> <span style="color:#f92672">~</span>CN_QUANTIFIER_FLAG;
+</span></span><span style="display:flex;"><span>        <span style="color:#66d9ef">break</span>;
+</span></span><span style="display:flex;"><span>    <span style="color:#66d9ef">case</span> SegmenterType<span style="color:#f92672">::</span>LETTER_SEGMENTER:
+</span></span><span style="display:flex;"><span>        buffer_locker_ <span style="color:#f92672">&amp;=</span> <span style="color:#f92672">~</span>LETTER_SEGMENTER_FLAG;
+</span></span><span style="display:flex;"><span>        <span style="color:#66d9ef">break</span>;
+</span></span><span style="display:flex;"><span>    }
+</span></span><span style="display:flex;"><span>}
+</span></span></code></pre></div><h2 id="unlocklockbuffer函数耗时原因">unlock/lockBuffer函数耗时原因</h2>
+<p>IK分词器处理文本的粒度是单个字符，每个字符的处理都需要调用所有子分词器。因此，lockBuffer函数的调用次数为：length(文本长度) * 3(子分词器数量) * (1-3)，调用频率极高。</p>&hellip;
+	
+</div>
+					<a class="readmore" href="/posts/ik-performance-review/">Read more ⟶</a>
+				</section>
 				
 				
 
 
 			</main>
 			<footer>
-  <div style="display:flex"><a class="soc" href="https://github.com/athul/archie" rel="me" title="GitHub"><svg class="feather">
+  <div style="display:flex"><a class="soc" href="https://github.com/Ryan19929" rel="me" title="GitHub"><svg class="feather">
    <use href="/svg/feather-sprite.51cf5647cb1987f769b616558f2620fd9423d72058490231b391bf6aa3744b55.svg#github" />
-</svg></a><a class="border"></a><a class="soc" href="https://twitter.com/athulcajay/" rel="me" title="Twitter"><svg class="feather">
-   <use href="/svg/feather-sprite.51cf5647cb1987f769b616558f2620fd9423d72058490231b391bf6aa3744b55.svg#twitter" />
-</svg></a><a class="border"></a><a class="soc" href="https://gitlab.com/athul/" rel="me" title="GitLab"><svg class="feather">
-   <use href="/svg/feather-sprite.51cf5647cb1987f769b616558f2620fd9423d72058490231b391bf6aa3744b55.svg#gitlab" />
 </svg></a><a class="border"></a></div>
   <div class="footer-info">
     2025  © Athul |  <a
       href="https://github.com/athul/archie">Archie Theme</a> | Built with <a href="https://gohugo.io">Hugo</a>
   </div>
 </footer>
-
-
 
 
 		</div>

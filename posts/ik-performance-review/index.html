@@ -1,0 +1,287 @@
+<!DOCTYPE html>
+<html><head lang="en"><script src="/livereload.js?mindelay=10&amp;v=2&amp;port=1313&amp;path=livereload" data-no-instant defer></script>
+	<meta charset="utf-8" />
+	<meta http-equiv="X-UA-Compatible" content="IE=edge"><title>IK不同平台上性能差异问题复盘 - Ryan19929&#39;s blog</title><meta name="viewport" content="width=device-width, initial-scale=1">
+	<meta name="description" content="起因
+在优化IK分词器的过程中，发现C&#43;&#43;版本在性能上落后于Java版本。在解决了内存频繁申请和回收的问题后，C&#43;&#43;版本在Mac平台上的性能已经接近jieba_cpp版本。然而，在Linux服务器上，C&#43;&#43;版本的性能仅与ik_java持平，与jieba_cpp的性能差距依然显著。
+排查的过程
+Perf工具分析
+通过Perf工具生成的报告显示，basic_string::compare函数占用了较多的CPU资源(10%，callgrind函数调用占20%&#43;)。然而，由于Perf未能明确显示该函数的调用者，初步推测可能是正常调用，因此暂时搁置了该区域的进一步调查，转而关注其他热点函数。
+Instruments工具分析
+在Mac平台上，使用Instruments工具收集CPU耗时数据。通过逐步优化代码质量较差的区域，每次优化带来2-5%的性能提升。最终，在引入内存池后，性能得到了显著提升，代码执行时间从约220秒优化至180秒左右。此后进一步优化的空间变得有限。
+Callgrind 工具分析
+使用Callgrind工具分析函数调用情况。由于使用800MB大小的数据集时，Callgrind收集数据的时间过长（数小时），一度误以为工具卡死。最终的报告清晰地揭示了lockBuffer和unlockBuffer函数调用了字符串的compare函数，并且占用27%。
+然而，Perf报告中unlockBuffer和lockBuffer的CPU占用率仅为3%，且在火焰图中的位置并不显眼，80%的CPU时间消耗在分词器的analysis部分，因此这些函数的影响被忽视。
+代码分析
+以CJK_SEGMENTER为例，相关代码如下：
+// CJK_Segmenter
+const std::string CJKSegmenter::SEGMENTER_NAME = &#34;CJK_SEGMENTER&#34;;
+context.lockBuffer(SEGMENTER_NAME);
+
+// AnalyzeContext
+void AnalyzeContext::lockBuffer(const std::string&amp; segmenterName) {
+    if (segmenterName == &#34;CJK_SEGMENTER&#34;)
+        buffer_locker_ |= CJK_SEGMENTER_FLAG;
+    else if (segmenterName == &#34;CN_QUANTIFIER&#34;)
+        buffer_locker_ |= CN_QUANTIFIER_FLAG;
+    else if (segmenterName == &#34;LETTER_SEGMENTER&#34;)
+        buffer_locker_ |= LETTER_SEGMENTER_FLAG;
+}
+
+void AnalyzeContext::unlockBuffer(SegmenterType type) {
+    switch (type) {
+    case SegmenterType::CJK_SEGMENTER:
+        buffer_locker_ &amp;= ~CJK_SEGMENTER_FLAG;
+        break;
+    case SegmenterType::CN_QUANTIFIER:
+        buffer_locker_ &amp;= ~CN_QUANTIFIER_FLAG;
+        break;
+    case SegmenterType::LETTER_SEGMENTER:
+        buffer_locker_ &amp;= ~LETTER_SEGMENTER_FLAG;
+        break;
+    }
+}
+unlock/lockBuffer函数耗时原因
+IK分词器处理文本的粒度是单个字符，每个字符的处理都需要调用所有子分词器。因此，lockBuffer函数的调用次数为：length(文本长度) * 3(子分词器数量) * (1-3)，调用频率极高。" />
+	<meta property="og:image" content=""/>
+	<meta property="og:url" content="http://localhost:1313/posts/ik-performance-review/">
+  <meta property="og:site_name" content="Ryan19929&#39;s blog">
+  <meta property="og:title" content="IK不同平台上性能差异问题复盘">
+  <meta property="og:description" content="起因 在优化IK分词器的过程中，发现C&#43;&#43;版本在性能上落后于Java版本。在解决了内存频繁申请和回收的问题后，C&#43;&#43;版本在Mac平台上的性能已经接近jieba_cpp版本。然而，在Linux服务器上，C&#43;&#43;版本的性能仅与ik_java持平，与jieba_cpp的性能差距依然显著。
+排查的过程 Perf工具分析 通过Perf工具生成的报告显示，basic_string::compare函数占用了较多的CPU资源(10%，callgrind函数调用占20%&#43;)。然而，由于Perf未能明确显示该函数的调用者，初步推测可能是正常调用，因此暂时搁置了该区域的进一步调查，转而关注其他热点函数。
+Instruments工具分析 在Mac平台上，使用Instruments工具收集CPU耗时数据。通过逐步优化代码质量较差的区域，每次优化带来2-5%的性能提升。最终，在引入内存池后，性能得到了显著提升，代码执行时间从约220秒优化至180秒左右。此后进一步优化的空间变得有限。
+Callgrind 工具分析 使用Callgrind工具分析函数调用情况。由于使用800MB大小的数据集时，Callgrind收集数据的时间过长（数小时），一度误以为工具卡死。最终的报告清晰地揭示了lockBuffer和unlockBuffer函数调用了字符串的compare函数，并且占用27%。 然而，Perf报告中unlockBuffer和lockBuffer的CPU占用率仅为3%，且在火焰图中的位置并不显眼，80%的CPU时间消耗在分词器的analysis部分，因此这些函数的影响被忽视。
+代码分析 以CJK_SEGMENTER为例，相关代码如下：
+// CJK_Segmenter const std::string CJKSegmenter::SEGMENTER_NAME = &#34;CJK_SEGMENTER&#34;; context.lockBuffer(SEGMENTER_NAME); // AnalyzeContext void AnalyzeContext::lockBuffer(const std::string&amp; segmenterName) { if (segmenterName == &#34;CJK_SEGMENTER&#34;) buffer_locker_ |= CJK_SEGMENTER_FLAG; else if (segmenterName == &#34;CN_QUANTIFIER&#34;) buffer_locker_ |= CN_QUANTIFIER_FLAG; else if (segmenterName == &#34;LETTER_SEGMENTER&#34;) buffer_locker_ |= LETTER_SEGMENTER_FLAG; } void AnalyzeContext::unlockBuffer(SegmenterType type) { switch (type) { case SegmenterType::CJK_SEGMENTER: buffer_locker_ &amp;= ~CJK_SEGMENTER_FLAG; break; case SegmenterType::CN_QUANTIFIER: buffer_locker_ &amp;= ~CN_QUANTIFIER_FLAG; break; case SegmenterType::LETTER_SEGMENTER: buffer_locker_ &amp;= ~LETTER_SEGMENTER_FLAG; break; } } unlock/lockBuffer函数耗时原因 IK分词器处理文本的粒度是单个字符，每个字符的处理都需要调用所有子分词器。因此，lockBuffer函数的调用次数为：length(文本长度) * 3(子分词器数量) * (1-3)，调用频率极高。">
+  <meta property="og:locale" content="en_us">
+  <meta property="og:type" content="article">
+    <meta property="article:section" content="posts">
+    <meta property="article:published_time" content="2025-01-26T14:49:42+08:00">
+    <meta property="article:modified_time" content="2025-01-26T14:49:42+08:00">
+
+  <meta name="twitter:card" content="summary">
+  <meta name="twitter:title" content="IK不同平台上性能差异问题复盘">
+  <meta name="twitter:description" content="起因 在优化IK分词器的过程中，发现C&#43;&#43;版本在性能上落后于Java版本。在解决了内存频繁申请和回收的问题后，C&#43;&#43;版本在Mac平台上的性能已经接近jieba_cpp版本。然而，在Linux服务器上，C&#43;&#43;版本的性能仅与ik_java持平，与jieba_cpp的性能差距依然显著。
+排查的过程 Perf工具分析 通过Perf工具生成的报告显示，basic_string::compare函数占用了较多的CPU资源(10%，callgrind函数调用占20%&#43;)。然而，由于Perf未能明确显示该函数的调用者，初步推测可能是正常调用，因此暂时搁置了该区域的进一步调查，转而关注其他热点函数。
+Instruments工具分析 在Mac平台上，使用Instruments工具收集CPU耗时数据。通过逐步优化代码质量较差的区域，每次优化带来2-5%的性能提升。最终，在引入内存池后，性能得到了显著提升，代码执行时间从约220秒优化至180秒左右。此后进一步优化的空间变得有限。
+Callgrind 工具分析 使用Callgrind工具分析函数调用情况。由于使用800MB大小的数据集时，Callgrind收集数据的时间过长（数小时），一度误以为工具卡死。最终的报告清晰地揭示了lockBuffer和unlockBuffer函数调用了字符串的compare函数，并且占用27%。 然而，Perf报告中unlockBuffer和lockBuffer的CPU占用率仅为3%，且在火焰图中的位置并不显眼，80%的CPU时间消耗在分词器的analysis部分，因此这些函数的影响被忽视。
+代码分析 以CJK_SEGMENTER为例，相关代码如下：
+// CJK_Segmenter const std::string CJKSegmenter::SEGMENTER_NAME = &#34;CJK_SEGMENTER&#34;; context.lockBuffer(SEGMENTER_NAME); // AnalyzeContext void AnalyzeContext::lockBuffer(const std::string&amp; segmenterName) { if (segmenterName == &#34;CJK_SEGMENTER&#34;) buffer_locker_ |= CJK_SEGMENTER_FLAG; else if (segmenterName == &#34;CN_QUANTIFIER&#34;) buffer_locker_ |= CN_QUANTIFIER_FLAG; else if (segmenterName == &#34;LETTER_SEGMENTER&#34;) buffer_locker_ |= LETTER_SEGMENTER_FLAG; } void AnalyzeContext::unlockBuffer(SegmenterType type) { switch (type) { case SegmenterType::CJK_SEGMENTER: buffer_locker_ &amp;= ~CJK_SEGMENTER_FLAG; break; case SegmenterType::CN_QUANTIFIER: buffer_locker_ &amp;= ~CN_QUANTIFIER_FLAG; break; case SegmenterType::LETTER_SEGMENTER: buffer_locker_ &amp;= ~LETTER_SEGMENTER_FLAG; break; } } unlock/lockBuffer函数耗时原因 IK分词器处理文本的粒度是单个字符，每个字符的处理都需要调用所有子分词器。因此，lockBuffer函数的调用次数为：length(文本长度) * 3(子分词器数量) * (1-3)，调用频率极高。">
+
+        <link href="http://localhost:1313/css/fonts.2c2227b81b1970a03e760aa2e6121cd01f87c88586803cbb282aa224720a765f.css" rel="stylesheet">
+	
+
+	
+	<link rel="stylesheet" type="text/css" media="screen" href="http://localhost:1313/css/main.e5be0b244cfea0385bf04425148e0847f227ebc587eb7cf8ce8e2532d66a9248.css" />
+		<link id="darkModeStyle" rel="stylesheet" type="text/css" href="http://localhost:1313/css/dark.50b57e12d401420df23965fed157368aba37b76df0ecefd0b1ecd4da664f01a0.css" media="(prefers-color-scheme: dark)"  /><script type="text/javascript"
+		src="http://localhost:1313/js/MathJax.js"></script>
+		
+		<script type="text/x-mathjax-config">
+		MathJax.Hub.Config({
+			tex2jax: {
+				inlineMath: [['$','$'], ['\\(','\\)']],
+				displayMath: [['$$','$$'], ['\[','\]']],
+				processEscapes: true,
+				processEnvironments: true,
+				skipTags: ['script', 'noscript', 'style', 'textarea', 'pre'],
+				TeX: { equationNumbers: { autoNumber: "AMS" },
+						 extensions: ["AMSmath.js", "AMSsymbols.js"] }
+			}
+		});
+		</script><link rel="stylesheet" href="http://localhost:1313/katex/katex.min.css ">
+		<script defer src="http://localhost:1313/katex/katex.min.js"></script>
+		<script defer src="http://localhost:1313/katex/auto-render.min.js" onload="renderMathInElement(document.body);"></script>
+		
+		<script>
+			document.addEventListener("DOMContentLoaded", function() {
+					renderMathInElement(document.body, {
+							delimiters: [
+									{left: "$$", right: "$$", display: true},
+									{left: "$", right: "$", display: false}
+							]
+					});
+			});
+		</script>
+</head>
+<body>
+        <div class="content"><header>
+	<div class="main">
+		<a href="http://localhost:1313/">Ryan19929&#39;s blog</a>
+	</div>
+	<nav>
+		
+		<a href="/">Home</a>
+		
+		<a href="/posts">All posts</a>
+		
+		<a href="/about">About</a>
+		
+		<a href="/tags">Tags</a>
+		
+		
+	</nav>
+</header>
+
+<main>
+  <article>
+    <div class="post-container">
+      
+      <div class="post-content">
+        <div class="title">
+          <h1 class="title">IK不同平台上性能差异问题复盘</h1>
+          <div class="meta">Posted on Jan 26, 2025</div>
+        </div>
+        
+        <section class="body">
+          <h1 id="起因">起因</h1>
+<p>在优化IK分词器的过程中，发现C++版本在性能上落后于Java版本。在解决了内存频繁申请和回收的问题后，C++版本在Mac平台上的性能已经接近jieba_cpp版本。然而，在Linux服务器上，C++版本的性能仅与ik_java持平，与jieba_cpp的性能差距依然显著。</p>
+<h1 id="排查的过程">排查的过程</h1>
+<h2 id="perf工具分析">Perf工具分析</h2>
+<p>通过Perf工具生成的报告显示，basic_string::compare函数占用了较多的CPU资源(10%，callgrind函数调用占20%+)。然而，由于Perf未能明确显示该函数的调用者，初步推测可能是正常调用，因此暂时搁置了该区域的进一步调查，转而关注其他热点函数。</p>
+<h2 id="instruments工具分析">Instruments工具分析</h2>
+<p>在Mac平台上，使用Instruments工具收集CPU耗时数据。通过逐步优化代码质量较差的区域，每次优化带来2-5%的性能提升。最终，在引入内存池后，性能得到了显著提升，代码执行时间从约220秒优化至180秒左右。此后进一步优化的空间变得有限。</p>
+<h2 id="callgrind-工具分析">Callgrind 工具分析</h2>
+<p>使用Callgrind工具分析函数调用情况。由于使用800MB大小的数据集时，Callgrind收集数据的时间过长（数小时），一度误以为工具卡死。最终的报告清晰地揭示了lockBuffer和unlockBuffer函数调用了字符串的compare函数，并且占用27%。
+然而，Perf报告中unlockBuffer和lockBuffer的CPU占用率仅为3%，且在火焰图中的位置并不显眼，80%的CPU时间消耗在分词器的analysis部分，因此这些函数的影响被忽视。</p>
+<h1 id="代码分析">代码分析</h1>
+<p>以CJK_SEGMENTER为例，相关代码如下：</p>
+<div class="highlight"><pre tabindex="0" style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-cpp" data-lang="cpp"><span style="display:flex;"><span><span style="color:#75715e">// CJK_Segmenter
+</span></span></span><span style="display:flex;"><span><span style="color:#75715e"></span><span style="color:#66d9ef">const</span> std<span style="color:#f92672">::</span>string CJKSegmenter<span style="color:#f92672">::</span>SEGMENTER_NAME <span style="color:#f92672">=</span> <span style="color:#e6db74">&#34;CJK_SEGMENTER&#34;</span>;
+</span></span><span style="display:flex;"><span>context.lockBuffer(SEGMENTER_NAME);
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#75715e">// AnalyzeContext
+</span></span></span><span style="display:flex;"><span><span style="color:#75715e"></span><span style="color:#66d9ef">void</span> AnalyzeContext<span style="color:#f92672">::</span>lockBuffer(<span style="color:#66d9ef">const</span> std<span style="color:#f92672">::</span>string<span style="color:#f92672">&amp;</span> segmenterName) {
+</span></span><span style="display:flex;"><span>    <span style="color:#66d9ef">if</span> (segmenterName <span style="color:#f92672">==</span> <span style="color:#e6db74">&#34;CJK_SEGMENTER&#34;</span>)
+</span></span><span style="display:flex;"><span>        buffer_locker_ <span style="color:#f92672">|=</span> CJK_SEGMENTER_FLAG;
+</span></span><span style="display:flex;"><span>    <span style="color:#66d9ef">else</span> <span style="color:#a6e22e">if</span> (segmenterName <span style="color:#f92672">==</span> <span style="color:#e6db74">&#34;CN_QUANTIFIER&#34;</span>)
+</span></span><span style="display:flex;"><span>        buffer_locker_ <span style="color:#f92672">|=</span> CN_QUANTIFIER_FLAG;
+</span></span><span style="display:flex;"><span>    <span style="color:#66d9ef">else</span> <span style="color:#a6e22e">if</span> (segmenterName <span style="color:#f92672">==</span> <span style="color:#e6db74">&#34;LETTER_SEGMENTER&#34;</span>)
+</span></span><span style="display:flex;"><span>        buffer_locker_ <span style="color:#f92672">|=</span> LETTER_SEGMENTER_FLAG;
+</span></span><span style="display:flex;"><span>}
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#66d9ef">void</span> AnalyzeContext<span style="color:#f92672">::</span>unlockBuffer(SegmenterType type) {
+</span></span><span style="display:flex;"><span>    <span style="color:#66d9ef">switch</span> (type) {
+</span></span><span style="display:flex;"><span>    <span style="color:#66d9ef">case</span> SegmenterType<span style="color:#f92672">::</span>CJK_SEGMENTER:
+</span></span><span style="display:flex;"><span>        buffer_locker_ <span style="color:#f92672">&amp;=</span> <span style="color:#f92672">~</span>CJK_SEGMENTER_FLAG;
+</span></span><span style="display:flex;"><span>        <span style="color:#66d9ef">break</span>;
+</span></span><span style="display:flex;"><span>    <span style="color:#66d9ef">case</span> SegmenterType<span style="color:#f92672">::</span>CN_QUANTIFIER:
+</span></span><span style="display:flex;"><span>        buffer_locker_ <span style="color:#f92672">&amp;=</span> <span style="color:#f92672">~</span>CN_QUANTIFIER_FLAG;
+</span></span><span style="display:flex;"><span>        <span style="color:#66d9ef">break</span>;
+</span></span><span style="display:flex;"><span>    <span style="color:#66d9ef">case</span> SegmenterType<span style="color:#f92672">::</span>LETTER_SEGMENTER:
+</span></span><span style="display:flex;"><span>        buffer_locker_ <span style="color:#f92672">&amp;=</span> <span style="color:#f92672">~</span>LETTER_SEGMENTER_FLAG;
+</span></span><span style="display:flex;"><span>        <span style="color:#66d9ef">break</span>;
+</span></span><span style="display:flex;"><span>    }
+</span></span><span style="display:flex;"><span>}
+</span></span></code></pre></div><h2 id="unlocklockbuffer函数耗时原因">unlock/lockBuffer函数耗时原因</h2>
+<p>IK分词器处理文本的粒度是单个字符，每个字符的处理都需要调用所有子分词器。因此，lockBuffer函数的调用次数为：length(文本长度) * 3(子分词器数量) * (1-3)，调用频率极高。</p>
+<h2 id="mac平台不受影响的原因">Mac平台不受影响的原因</h2>
+<p>通过汇编代码分析发现，x86架构（Linux）使用了basic_string::compare函数调用，引入了额外的开销。而ARM架构（Mac）通过直接使用寄存器比较，避免了这种开销。</p>
+<div class="highlight"><pre tabindex="0" style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-asm" data-lang="asm"><span style="display:flex;"><span><span style="color:#75715e">// arm(mac)以比较CJK_SEGMENTER(13个字符)为例
+</span></span></span><span style="display:flex;"><span><span style="color:#75715e"></span><span style="color:#960050;background-color:#1e0010">+0</span><span style="color:#a6e22e">x24</span>	<span style="color:#66d9ef">ldr</span>                 <span style="color:#66d9ef">x9</span>, [<span style="color:#66d9ef">x1</span>]
+</span></span><span style="display:flex;"><span><span style="color:#960050;background-color:#1e0010">+0</span><span style="color:#a6e22e">x28</span>	<span style="color:#66d9ef">cmp</span>                 <span style="color:#66d9ef">w8</span>, <span style="color:#75715e">#0x0
+</span></span></span><span style="display:flex;"><span><span style="color:#75715e"></span><span style="color:#960050;background-color:#1e0010">+0</span><span style="color:#a6e22e">x2c</span>	<span style="color:#66d9ef">csel</span>                <span style="color:#66d9ef">x8</span>, <span style="color:#66d9ef">x9</span>, <span style="color:#66d9ef">x1</span>, <span style="color:#66d9ef">lt</span>
+</span></span><span style="display:flex;"><span><span style="color:#960050;background-color:#1e0010">+0</span><span style="color:#a6e22e">x30</span>	<span style="color:#66d9ef">ldr</span>                 <span style="color:#66d9ef">x9</span>, [<span style="color:#66d9ef">x8</span>]
+</span></span><span style="display:flex;"><span><span style="color:#960050;background-color:#1e0010">+0</span><span style="color:#a6e22e">x34</span>	<span style="color:#66d9ef">ldur</span>                <span style="color:#66d9ef">x10</span>, [<span style="color:#66d9ef">x8</span>, <span style="color:#75715e">#0x5]
+</span></span></span><span style="display:flex;"><span><span style="color:#75715e"></span><span style="color:#960050;background-color:#1e0010">+0</span><span style="color:#a6e22e">x38</span>	<span style="color:#66d9ef">mov</span>                 <span style="color:#66d9ef">x11</span>, <span style="color:#75715e">#0x4a43                    ; =19011
+</span></span></span><span style="display:flex;"><span><span style="color:#75715e"></span><span style="color:#960050;background-color:#1e0010">+0</span><span style="color:#a6e22e">x3c</span>	<span style="color:#66d9ef">movk</span>                <span style="color:#66d9ef">x11</span>, <span style="color:#75715e">#0x5f4b, lsl #16
+</span></span></span><span style="display:flex;"><span><span style="color:#75715e"></span><span style="color:#960050;background-color:#1e0010">+0</span><span style="color:#a6e22e">x40</span>	<span style="color:#66d9ef">movk</span>                <span style="color:#66d9ef">x11</span>, <span style="color:#75715e">#0x4553, lsl #32
+</span></span></span><span style="display:flex;"><span><span style="color:#75715e"></span><span style="color:#960050;background-color:#1e0010">+0</span><span style="color:#a6e22e">x44</span>	<span style="color:#66d9ef">movk</span>                <span style="color:#66d9ef">x11</span>, <span style="color:#75715e">#0x4d47, lsl #48
+</span></span></span><span style="display:flex;"><span><span style="color:#75715e"></span><span style="color:#960050;background-color:#1e0010">+0</span><span style="color:#a6e22e">x48</span>	<span style="color:#66d9ef">cmp</span>                 <span style="color:#66d9ef">x9</span>, <span style="color:#66d9ef">x11</span>
+</span></span><span style="display:flex;"><span><span style="color:#960050;background-color:#1e0010">+0</span><span style="color:#a6e22e">x4c</span>	<span style="color:#66d9ef">mov</span>                 <span style="color:#66d9ef">x9</span>, <span style="color:#75715e">#0x4745                     ; =18245
+</span></span></span><span style="display:flex;"><span><span style="color:#75715e"></span><span style="color:#960050;background-color:#1e0010">+0</span><span style="color:#a6e22e">x50</span>	<span style="color:#66d9ef">movk</span>                <span style="color:#66d9ef">x9</span>, <span style="color:#75715e">#0x454d, lsl #16
+</span></span></span><span style="display:flex;"><span><span style="color:#75715e"></span><span style="color:#960050;background-color:#1e0010">+0</span><span style="color:#a6e22e">x54</span>	<span style="color:#66d9ef">movk</span>                <span style="color:#66d9ef">x9</span>, <span style="color:#75715e">#0x544e, lsl #32
+</span></span></span><span style="display:flex;"><span><span style="color:#75715e"></span><span style="color:#960050;background-color:#1e0010">+0</span><span style="color:#a6e22e">x58</span>	<span style="color:#66d9ef">movk</span>                <span style="color:#66d9ef">x9</span>, <span style="color:#75715e">#0x5245, lsl #48
+</span></span></span><span style="display:flex;"><span><span style="color:#75715e"></span><span style="color:#960050;background-color:#1e0010">+0</span><span style="color:#a6e22e">x5c</span>	<span style="color:#66d9ef">ccmp</span>                <span style="color:#66d9ef">x10</span>, <span style="color:#66d9ef">x9</span>, <span style="color:#75715e">#0x0, eq
+</span></span></span><span style="display:flex;"><span><span style="color:#75715e"></span><span style="color:#960050;background-color:#1e0010">+0</span><span style="color:#a6e22e">x60</span>	<span style="color:#66d9ef">b.eq</span> <span style="color:#960050;background-color:#1e0010">&#34;</span><span style="color:#66d9ef">lockBuffer</span><span style="color:#960050;background-color:#1e0010">+</span><span style="color:#ae81ff">0xec</span><span style="color:#960050;background-color:#1e0010">&#34;</span>      <span style="color:#75715e">; 如果全部相等，跳转到指定地址
+</span></span></span><span style="display:flex;"><span><span style="color:#75715e"></span>
+</span></span><span style="display:flex;"><span><span style="color:#75715e">// linux，通过perf得到
+</span></span></span><span style="display:flex;"><span><span style="color:#75715e"></span><span style="color:#a6e22e">push</span>   %rbp
+</span></span><span style="display:flex;"><span><span style="color:#a6e22e">mov</span>    %rsp,%rbp
+</span></span><span style="display:flex;"><span><span style="color:#a6e22e">push</span>   %r14
+</span></span><span style="display:flex;"><span><span style="color:#a6e22e">push</span>   %rbx                                                                                                                             <span style="color:#66d9ef">mov</span>    %rsi,%r14
+</span></span><span style="display:flex;"><span><span style="color:#a6e22e">mov</span>    %rdi,%rbx                                                                                                                       <span style="color:#66d9ef">lea</span>    <span style="color:#66d9ef">to_lower</span>(<span style="color:#66d9ef">unsigned</span> <span style="color:#66d9ef">char</span>)::<span style="color:#66d9ef">LUT</span><span style="color:#960050;background-color:#1e0010">+</span><span style="color:#ae81ff">0x120</span>,%rsi                                                                                         <span style="color:#66d9ef">mov</span>    %r14,%rdi
+</span></span><span style="display:flex;"><span><span style="color:#960050;background-color:#1e0010">→</span> <span style="color:#a6e22e">callq</span>  <span style="color:#66d9ef">std</span>::<span style="color:#66d9ef">__cxx11</span>::<span style="color:#66d9ef">basic_string</span><span style="color:#960050;background-color:#1e0010">&lt;</span><span style="color:#66d9ef">char</span>, <span style="color:#66d9ef">std</span>::<span style="color:#66d9ef">char_traits</span><span style="color:#960050;background-color:#1e0010">&lt;</span><span style="color:#66d9ef">char</span><span style="color:#960050;background-color:#1e0010">&gt;</span>, <span style="color:#66d9ef">std</span>::<span style="color:#66d9ef">allocator</span><span style="color:#960050;background-color:#1e0010">&lt;</span><span style="color:#66d9ef">char</span><span style="color:#960050;background-color:#1e0010">&gt;</span> <span style="color:#960050;background-color:#1e0010">&gt;</span>::<span style="color:#66d9ef">compare</span>
+</span></span><span style="display:flex;"><span><span style="color:#a6e22e">test</span>   %eax,%eax
+</span></span><span style="display:flex;"><span><span style="color:#960050;background-color:#1e0010">→</span> <span style="color:#a6e22e">je</span>     <span style="color:#ae81ff">21</span><span style="color:#66d9ef">b57b</span> <span style="color:#960050;background-color:#1e0010">&lt;</span><span style="color:#66d9ef">lucene</span>::<span style="color:#66d9ef">analysis</span>::<span style="color:#66d9ef">ik</span>::<span style="color:#66d9ef">AnalyzeContext</span>::<span style="color:#66d9ef">unlockBuffer</span>(<span style="color:#66d9ef">std</span>::<span style="color:#66d9ef">__cxx11</span>::<span style="color:#66d9ef">basic_string</span><span style="color:#960050;background-color:#1e0010">&lt;</span><span style="color:#66d9ef">char</span>, <span style="color:#66d9ef">std</span>::<span style="color:#66d9ef">char_traits</span><span style="color:#960050;background-color:#1e0010">&lt;</span><span style="color:#66d9ef">char</span><span style="color:#960050;background-color:#1e0010">&gt;</span>, <span style="color:#66d9ef">std</span>::<span style="color:#66d9ef">allocat</span><span style="color:#960050;background-color:#1e0010">▒</span>
+</span></span><span style="display:flex;"><span><span style="color:#a6e22e">lea</span>    <span style="color:#66d9ef">to_lower</span>(<span style="color:#66d9ef">unsigned</span> <span style="color:#66d9ef">char</span>)::<span style="color:#66d9ef">LUT</span><span style="color:#960050;background-color:#1e0010">+</span><span style="color:#ae81ff">0x12e</span>,%rsi
+</span></span><span style="display:flex;"><span><span style="color:#a6e22e">mov</span>    %r14,%rdi
+</span></span><span style="display:flex;"><span><span style="color:#960050;background-color:#1e0010">→</span> <span style="color:#a6e22e">callq</span>  <span style="color:#66d9ef">std</span>::<span style="color:#66d9ef">__cxx11</span>::<span style="color:#66d9ef">basic_string</span><span style="color:#960050;background-color:#1e0010">&lt;</span><span style="color:#66d9ef">char</span>, <span style="color:#66d9ef">std</span>::<span style="color:#66d9ef">char_traits</span><span style="color:#960050;background-color:#1e0010">&lt;</span><span style="color:#66d9ef">char</span><span style="color:#960050;background-color:#1e0010">&gt;</span>, <span style="color:#66d9ef">std</span>::<span style="color:#66d9ef">allocator</span><span style="color:#960050;background-color:#1e0010">&lt;</span><span style="color:#66d9ef">char</span><span style="color:#960050;background-color:#1e0010">&gt;</span> <span style="color:#960050;background-color:#1e0010">&gt;</span>::<span style="color:#66d9ef">compare</span>
+</span></span><span style="display:flex;"><span><span style="color:#a6e22e">test</span>   %eax,%eax
+</span></span><span style="display:flex;"><span><span style="color:#960050;background-color:#1e0010">→</span> <span style="color:#a6e22e">je</span>     <span style="color:#ae81ff">21</span><span style="color:#66d9ef">b57f</span> <span style="color:#960050;background-color:#1e0010">&lt;</span><span style="color:#66d9ef">lucene</span>::<span style="color:#66d9ef">analysis</span>::<span style="color:#66d9ef">ik</span>::<span style="color:#66d9ef">AnalyzeContext</span>::<span style="color:#66d9ef">unlockBuffer</span>(<span style="color:#66d9ef">std</span>::<span style="color:#66d9ef">__cxx11</span>::<span style="color:#66d9ef">basic_string</span><span style="color:#960050;background-color:#1e0010">&lt;</span><span style="color:#66d9ef">char</span>, <span style="color:#66d9ef">std</span>::<span style="color:#66d9ef">char_traits</span><span style="color:#960050;background-color:#1e0010">&lt;</span><span style="color:#66d9ef">char</span><span style="color:#960050;background-color:#1e0010">&gt;</span>, <span style="color:#66d9ef">std</span>::<span style="color:#66d9ef">allocat</span>
+</span></span><span style="display:flex;"><span><span style="color:#a6e22e">lea</span>    <span style="color:#66d9ef">to_lower</span>(<span style="color:#66d9ef">unsigned</span> <span style="color:#66d9ef">char</span>)::<span style="color:#66d9ef">LUT</span><span style="color:#960050;background-color:#1e0010">+</span><span style="color:#ae81ff">0x13c</span>,%rsi
+</span></span><span style="display:flex;"><span><span style="color:#a6e22e">mov</span>    %r14,%rdi
+</span></span><span style="display:flex;"><span><span style="color:#960050;background-color:#1e0010">→</span> <span style="color:#a6e22e">callq</span>  <span style="color:#66d9ef">std</span>::<span style="color:#66d9ef">__cxx11</span>::<span style="color:#66d9ef">basic_string</span><span style="color:#960050;background-color:#1e0010">&lt;</span><span style="color:#66d9ef">char</span>, <span style="color:#66d9ef">std</span>::<span style="color:#66d9ef">char_traits</span><span style="color:#960050;background-color:#1e0010">&lt;</span><span style="color:#66d9ef">char</span><span style="color:#960050;background-color:#1e0010">&gt;</span>, <span style="color:#66d9ef">std</span>::<span style="color:#66d9ef">allocator</span><span style="color:#960050;background-color:#1e0010">&lt;</span><span style="color:#66d9ef">char</span><span style="color:#960050;background-color:#1e0010">&gt;</span> <span style="color:#960050;background-color:#1e0010">&gt;</span>::<span style="color:#66d9ef">compare</span>
+</span></span><span style="display:flex;"><span><span style="color:#a6e22e">test</span>   %eax,%eax
+</span></span><span style="display:flex;"><span><span style="color:#960050;background-color:#1e0010">→</span> <span style="color:#a6e22e">je</span>     <span style="color:#ae81ff">21</span><span style="color:#66d9ef">b583</span> <span style="color:#960050;background-color:#1e0010">&lt;</span><span style="color:#66d9ef">lucene</span>::<span style="color:#66d9ef">analysis</span>::<span style="color:#66d9ef">ik</span>::<span style="color:#66d9ef">AnalyzeContext</span>::<span style="color:#66d9ef">unlockBuffer</span>(<span style="color:#66d9ef">std</span>::<span style="color:#66d9ef">__cxx11</span>::<span style="color:#66d9ef">basic_string</span><span style="color:#960050;background-color:#1e0010">&lt;</span><span style="color:#66d9ef">char</span>, <span style="color:#66d9ef">std</span>::<span style="color:#66d9ef">char_traits</span><span style="color:#960050;background-color:#1e0010">&lt;</span><span style="color:#66d9ef">char</span><span style="color:#960050;background-color:#1e0010">&gt;</span>, <span style="color:#66d9ef">std</span>::<span style="color:#66d9ef">allocat</span>
+</span></span><span style="display:flex;"><span><span style="color:#a6e22e">pop</span>    %rbx
+</span></span><span style="display:flex;"><span><span style="color:#a6e22e">pop</span>    %r14
+</span></span><span style="display:flex;"><span><span style="color:#a6e22e">pop</span>    %rbp
+</span></span><span style="display:flex;"><span><span style="color:#960050;background-color:#1e0010">←</span> <span style="color:#a6e22e">retq</span>
+</span></span><span style="display:flex;"><span><span style="color:#a6e22e">mov</span>    <span style="color:#66d9ef">$0xfe</span>,%al
+</span></span><span style="display:flex;"><span><span style="color:#960050;background-color:#1e0010">→</span> <span style="color:#a6e22e">jmp</span>    <span style="color:#ae81ff">21</span><span style="color:#66d9ef">b585</span> <span style="color:#960050;background-color:#1e0010">&lt;</span><span style="color:#66d9ef">lucene</span>::<span style="color:#66d9ef">analysis</span>::<span style="color:#66d9ef">ik</span>::<span style="color:#66d9ef">AnalyzeContext</span>::<span style="color:#66d9ef">unlockBuffer</span>(<span style="color:#66d9ef">std</span>::<span style="color:#66d9ef">__cxx11</span>::<span style="color:#66d9ef">basic_string</span><span style="color:#960050;background-color:#1e0010">&lt;</span><span style="color:#66d9ef">char</span>, <span style="color:#66d9ef">std</span>::<span style="color:#66d9ef">char_traits</span><span style="color:#960050;background-color:#1e0010">&lt;</span><span style="color:#66d9ef">char</span><span style="color:#960050;background-color:#1e0010">&gt;</span>, <span style="color:#66d9ef">std</span>::<span style="color:#66d9ef">allocat</span><span style="color:#960050;background-color:#1e0010">▒</span>
+</span></span><span style="display:flex;"><span><span style="color:#a6e22e">mov</span>    <span style="color:#66d9ef">$0xfd</span>,%al
+</span></span><span style="display:flex;"><span><span style="color:#960050;background-color:#1e0010">→</span> <span style="color:#a6e22e">jmp</span>    <span style="color:#ae81ff">21</span><span style="color:#66d9ef">b585</span> <span style="color:#960050;background-color:#1e0010">&lt;</span><span style="color:#66d9ef">lucene</span>::<span style="color:#66d9ef">analysis</span>::<span style="color:#66d9ef">ik</span>::<span style="color:#66d9ef">AnalyzeContext</span>::<span style="color:#66d9ef">unlockBuffer</span>(<span style="color:#66d9ef">std</span>::<span style="color:#66d9ef">__cxx11</span>::<span style="color:#66d9ef">basic_string</span><span style="color:#960050;background-color:#1e0010">&lt;</span><span style="color:#66d9ef">char</span>, <span style="color:#66d9ef">std</span>::<span style="color:#66d9ef">char_traits</span><span style="color:#960050;background-color:#1e0010">&lt;</span><span style="color:#66d9ef">char</span><span style="color:#960050;background-color:#1e0010">&gt;</span>, <span style="color:#66d9ef">std</span>::<span style="color:#66d9ef">allocat</span>
+</span></span><span style="display:flex;"><span><span style="color:#a6e22e">mov</span>    <span style="color:#66d9ef">$0xfb</span>,%al
+</span></span><span style="display:flex;"><span><span style="color:#a6e22e">and</span>    %al,<span style="color:#ae81ff">0x60</span>(%rbx)
+</span></span><span style="display:flex;"><span><span style="color:#a6e22e">pop</span>    %rbx
+</span></span><span style="display:flex;"><span><span style="color:#a6e22e">pop</span>    %r14
+</span></span><span style="display:flex;"><span><span style="color:#a6e22e">pop</span>    %rbp
+</span></span><span style="display:flex;"><span><span style="color:#960050;background-color:#1e0010">←</span> <span style="color:#a6e22e">retq</span>
+</span></span></code></pre></div><h2 id="该代码的来源">该代码的来源</h2>
+<p>Java版本的IK代码实现与C++版本不同，原始代码如下：</p>
+<div class="highlight"><pre tabindex="0" style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-java" data-lang="java"><span style="display:flex;"><span><span style="color:#66d9ef">private</span> Set<span style="color:#f92672">&lt;</span>String<span style="color:#f92672">&gt;</span> buffLocker;
+</span></span><span style="display:flex;"><span><span style="color:#66d9ef">void</span> <span style="color:#a6e22e">lockBuffer</span>(String segmenterName){
+</span></span><span style="display:flex;"><span>	<span style="color:#66d9ef">this</span>.<span style="color:#a6e22e">buffLocker</span>.<span style="color:#a6e22e">add</span>(segmenterName);
+</span></span><span style="display:flex;"><span>}
+</span></span></code></pre></div><p>在编写代码时，由于对IK原理了解不深入，未意识到该函数的调用频率极高。最初认为使用Set进行频繁的插入、比较和删除操作会导致性能问题，因此通过AI优化代码，改用位运算。然而，这一优化引入了字符串比较操作，导致了性能瓶颈。</p>
+<h2 id="优化后的性能">优化后的性能</h2>
+<p>在linux上IK_CPP分词器性能从160s优化到了110s。</p>
+<h1 id="总结">总结</h1>
+<p>这是第一次进行性能优化实践，与以往在学校和实验室中的经验有所不同，在找瓶颈时缺乏深度，并且代码带来的影响不了解。</p>
+
+        </section>
+        <div class="post-tags">
+          
+          
+          
+        </div>
+      </div>
+
+      
+      
+    </div>
+
+    <div id="disqus_thread"></div>
+<script type="text/javascript">
+    (function () {
+        
+        
+        if (window.location.hostname == "localhost")
+            return;
+
+        var dsq = document.createElement('script');
+        dsq.type = 'text/javascript';
+        dsq.async = true;
+        var disqus_shortname = 'yourDisqusShortname';
+        dsq.src = '//' + disqus_shortname + '.disqus.com/embed.js';
+        (document.getElementsByTagName('head')[0] || document.getElementsByTagName('body')[0]).appendChild(dsq);
+    })();
+</script>
+<noscript>Please enable JavaScript to view the <a href="http://disqus.com/?ref_noscript">comments powered by
+        Disqus.</a></noscript>
+<a href="http://disqus.com/" class="dsq-brlink">comments powered by <span class="logo-disqus">Disqus</span></a>
+</article>
+</main>
+<footer>
+  <div style="display:flex"><a class="soc" href="https://github.com/Ryan19929" rel="me" title="GitHub"><svg class="feather">
+   <use href="/svg/feather-sprite.51cf5647cb1987f769b616558f2620fd9423d72058490231b391bf6aa3744b55.svg#github" />
+</svg></a><a class="border"></a></div>
+  <div class="footer-info">
+    2025  © Athul |  <a
+      href="https://github.com/athul/archie">Archie Theme</a> | Built with <a href="https://gohugo.io">Hugo</a>
+  </div>
+</footer>
+
+</div>
+    </body>
+</html>
